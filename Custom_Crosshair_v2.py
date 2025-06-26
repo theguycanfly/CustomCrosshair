@@ -1,7 +1,8 @@
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog,
     QVBoxLayout, QHBoxLayout, QCheckBox, QMessageBox,
-    QMenu, QAction, QSystemTrayIcon, QShortcut, QFrame
+    QMenu, QAction, QSystemTrayIcon, QShortcut, QFrame,
+    QDialog, QLineEdit, QDialogButtonBox
 )
 from PyQt5.QtGui import QPixmap, QIcon, QKeySequence
 from PyQt5.QtCore import Qt, QPoint
@@ -13,7 +14,7 @@ import ctypes
 DEFAULT_IMAGE = "crosshair.png"
 TRAY_ICON = "crosshair.ico"
 CROSSHAIR_SIZE = 100
-WINDOW_SIZE = (400, 250)
+WINDOW_SIZE = (400, 280)  # Slightly taller to fit new button comfortably
 HOTKEY = "Alt+S"
 
 
@@ -29,6 +30,42 @@ def set_click_through(win: QWidget):
     hwnd = int(win.winId())
     style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
     ctypes.windll.user32.SetWindowLongW(hwnd, -20, style | 0x80000 | 0x20)
+
+
+class HotkeyDialog(QDialog):
+    def __init__(self, current_hotkey, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Change Hotkey")
+        self.setFixedSize(300, 100)
+        self.key_sequence = None
+
+        layout = QVBoxLayout(self)
+
+        self.label = QLabel(f"Current Hotkey: {current_hotkey}\nPress new hotkey combination:", self)
+        layout.addWidget(self.label)
+
+        self.edit = QLineEdit(self)
+        self.edit.setPlaceholderText("Press keys here")
+        self.edit.setReadOnly(True)
+        layout.addWidget(self.edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.grabKeyboard()
+
+    def keyPressEvent(self, event):
+        key_seq = QKeySequence(event.modifiers() | event.key())
+        # Filter out modifier-only keys (like Shift alone)
+        if key_seq.toString():
+            self.key_sequence = key_seq
+            self.edit.setText(key_seq.toString())
+        event.accept()
+
+    def keyReleaseEvent(self, event):
+        event.accept()
 
 
 class TrayMenuPopup(QWidget):
@@ -111,6 +148,7 @@ class TrayMenuPopup(QWidget):
 class CrosshairApp(QWidget):
     def __init__(self):
         super().__init__()
+        self.current_hotkey = HOTKEY  # Store current hotkey
         self._load_resources()
         self._init_window()
         self._init_ui()
@@ -149,11 +187,17 @@ class CrosshairApp(QWidget):
         self.center_btn.clicked.connect(self._on_center)
         self.pin_chk.stateChanged.connect(self._on_pin_toggle)
 
+        # Add the new "Change Hotkey" button
+        self.change_hotkey_btn = QPushButton("Change Hotkey")
+        self.change_hotkey_btn.setStyleSheet("background: #2c2c2c; padding: 8px; border-radius: 6px;")
+        self.change_hotkey_btn.clicked.connect(self._on_change_hotkey_clicked)
+
         btn_layout = QVBoxLayout()
         btn_layout.addWidget(self.reset_btn)
         btn_layout.addWidget(self.select_btn)
         btn_layout.addWidget(self.center_btn)
         btn_layout.addWidget(self.pin_chk)
+        btn_layout.addWidget(self.change_hotkey_btn)
 
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -189,7 +233,33 @@ class CrosshairApp(QWidget):
             self.popup_menu.show_at(pos)
 
     def _init_hotkey(self):
-        QShortcut(QKeySequence(HOTKEY), self, activated=QApplication.quit)
+        # Remove old shortcut if any
+        if hasattr(self, "_hotkey_shortcut") and self._hotkey_shortcut:
+            try:
+                self._hotkey_shortcut.activated.disconnect()
+            except Exception:
+                pass
+            self._hotkey_shortcut.setParent(None)
+
+        self._hotkey_shortcut = QShortcut(QKeySequence(self.current_hotkey), self)
+        self._hotkey_shortcut.activated.connect(self._toggle_visibility)
+
+    def _toggle_visibility(self):
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
+    def _on_change_hotkey_clicked(self):
+        dlg = HotkeyDialog(self.current_hotkey, self)
+        if dlg.exec_() == QDialog.Accepted and dlg.key_sequence:
+            new_hotkey = dlg.key_sequence.toString()
+            if new_hotkey:
+                self.current_hotkey = new_hotkey
+                self._init_hotkey()  # Re-init shortcut with new hotkey
+                QMessageBox.information(self, "Hotkey Changed", f"New hotkey set to: {new_hotkey}")
 
     def load_image(self, path: str):
         path = path if os.path.exists(path) else self.default_image
@@ -230,7 +300,7 @@ class CrosshairApp(QWidget):
         self.move(x, y)
 
     def _enter_overlay(self):
-        for w in (self.reset_btn, self.select_btn, self.center_btn, self.pin_chk):
+        for w in (self.reset_btn, self.select_btn, self.center_btn, self.pin_chk, self.change_hotkey_btn):
             w.hide()
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
@@ -253,7 +323,7 @@ class CrosshairApp(QWidget):
         set_click_through(self)
 
     def _exit_overlay(self):
-        for w in (self.reset_btn, self.select_btn, self.center_btn, self.pin_chk):
+        for w in (self.reset_btn, self.select_btn, self.center_btn, self.pin_chk, self.change_hotkey_btn):
             w.show()
         self.setAttribute(Qt.WA_TranslucentBackground, False)
         self._init_window()
