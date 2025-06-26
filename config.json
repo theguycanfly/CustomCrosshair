@@ -1,0 +1,9 @@
+{
+  "active_profile": "Default",
+  "profiles": {
+    "Default": {
+      "image": "C:/Projects/OverlayAppv1/crosshair.png",
+      "position": "center"
+    }
+  }
+}
