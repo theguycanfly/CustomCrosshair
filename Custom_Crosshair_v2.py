@@ -58,7 +58,6 @@ class HotkeyDialog(QDialog):
 
     def keyPressEvent(self, event):
         key_seq = QKeySequence(event.modifiers() | event.key())
-        # Filter out modifier-only keys (like Shift alone)
         if key_seq.toString():
             self.key_sequence = key_seq
             self.edit.setText(key_seq.toString())
@@ -99,19 +98,20 @@ class TrayMenuPopup(QWidget):
         self.show_btn = QPushButton("Show")
         self.hide_btn = QPushButton("Hide")
         self.exit_btn = QPushButton("Exit")
+        self.settings_btn = QPushButton("Settings")
 
         layout.addWidget(self.show_btn)
         layout.addWidget(self.hide_btn)
+        layout.addWidget(self.settings_btn)
         layout.addWidget(self.exit_btn)
 
         self.show_btn.clicked.connect(self._on_show)
         self.hide_btn.clicked.connect(self._on_hide)
         self.exit_btn.clicked.connect(self._on_exit)
+        self.settings_btn.clicked.connect(self._on_settings)
 
     def _on_show(self):
-        self.parent().show()
-        self.parent().raise_()
-        self.parent().activateWindow()
+        self.parent().show_overlay()
         self.hide()
 
     def _on_hide(self):
@@ -121,6 +121,10 @@ class TrayMenuPopup(QWidget):
     def _on_exit(self):
         QApplication.quit()
 
+    def _on_settings(self):
+        self.parent().show_settings()
+        self.hide()
+
     def show_at(self, pos: QPoint):
         screen = QApplication.primaryScreen()
         screen_geom = screen.availableGeometry()
@@ -129,15 +133,12 @@ class TrayMenuPopup(QWidget):
         x = pos.x()
         y = pos.y()
 
-        # If showing below the cursor would clip the popup at screen bottom, show above
         if y + popup_size.height() > screen_geom.bottom():
             y = y - popup_size.height()
 
-        # Prevent clipping off right edge
         if x + popup_size.width() > screen_geom.right():
             x = screen_geom.right() - popup_size.width()
 
-        # Prevent clipping off left edge
         if x < screen_geom.left():
             x = screen_geom.left()
 
@@ -148,13 +149,14 @@ class TrayMenuPopup(QWidget):
 class CrosshairApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_hotkey = HOTKEY  # Store current hotkey
+        self.current_hotkey = HOTKEY
         self._load_resources()
         self._init_window()
         self._init_ui()
         self._init_tray()
         self._init_hotkey()
         self.load_image(DEFAULT_IMAGE)
+        self.show_settings()
 
     def _load_resources(self):
         self.default_image = resource_path(DEFAULT_IMAGE)
@@ -187,7 +189,6 @@ class CrosshairApp(QWidget):
         self.center_btn.clicked.connect(self._on_center)
         self.pin_chk.stateChanged.connect(self._on_pin_toggle)
 
-        # Add the new "Change Hotkey" button
         self.change_hotkey_btn = QPushButton("Change Hotkey")
         self.change_hotkey_btn.setStyleSheet("background: #2c2c2c; padding: 8px; border-radius: 6px;")
         self.change_hotkey_btn.clicked.connect(self._on_change_hotkey_clicked)
@@ -199,48 +200,37 @@ class CrosshairApp(QWidget):
         btn_layout.addWidget(self.pin_chk)
         btn_layout.addWidget(self.change_hotkey_btn)
 
-        main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(10)
-        main_layout.addWidget(self.image_label)
-        main_layout.addLayout(btn_layout)
+        self.settings_layout = QHBoxLayout()
+        self.settings_layout.setContentsMargins(0, 0, 0, 0)
+        self.settings_layout.setSpacing(10)
+        self.settings_layout.addWidget(self.image_label)
+        self.settings_layout.addLayout(btn_layout)
 
     def _init_tray(self):
         icon = QIcon(self.tray_icon_path)
         self.tray = QSystemTrayIcon(icon, self)
-
-        # Remove native context menu
         self.tray.setContextMenu(None)
         self.tray.show()
-
-        # Prepare custom popup menu
         self.popup_menu = TrayMenuPopup(self)
-
-        # Connect tray icon clicks
         self.tray.activated.connect(self._on_tray_activated)
 
     def _on_tray_activated(self, reason):
-        if reason == QSystemTrayIcon.Trigger:  # Left click
+        if reason == QSystemTrayIcon.Trigger:
             if self.isVisible():
                 self.hide()
             else:
-                self.show()
-                self.raise_()
-                self.activateWindow()
-        elif reason == QSystemTrayIcon.Context:  # Right click
-            # Use cursor position to show popup menu
+                self.show_overlay()
+        elif reason == QSystemTrayIcon.Context:
             pos = QApplication.instance().desktop().cursor().pos()
             self.popup_menu.show_at(pos)
 
     def _init_hotkey(self):
-        # Remove old shortcut if any
         if hasattr(self, "_hotkey_shortcut") and self._hotkey_shortcut:
             try:
                 self._hotkey_shortcut.activated.disconnect()
             except Exception:
                 pass
             self._hotkey_shortcut.setParent(None)
-
         self._hotkey_shortcut = QShortcut(QKeySequence(self.current_hotkey), self)
         self._hotkey_shortcut.activated.connect(self._toggle_visibility)
 
@@ -248,9 +238,7 @@ class CrosshairApp(QWidget):
         if self.isVisible():
             self.hide()
         else:
-            self.show()
-            self.raise_()
-            self.activateWindow()
+            self.show_overlay()
 
     def _on_change_hotkey_clicked(self):
         dlg = HotkeyDialog(self.current_hotkey, self)
@@ -258,7 +246,7 @@ class CrosshairApp(QWidget):
             new_hotkey = dlg.key_sequence.toString()
             if new_hotkey:
                 self.current_hotkey = new_hotkey
-                self._init_hotkey()  # Re-init shortcut with new hotkey
+                self._init_hotkey()
                 QMessageBox.information(self, "Hotkey Changed", f"New hotkey set to: {new_hotkey}")
 
     def load_image(self, path: str):
@@ -274,7 +262,7 @@ class CrosshairApp(QWidget):
 
     def _on_reset(self):
         self.load_image(self.default_image)
-        self._exit_overlay()
+        self.show_settings()
 
     def _on_select(self):
         f, _ = QFileDialog.getOpenFileName(self, "Select Image", filter="PNG (*.png)")
@@ -282,21 +270,18 @@ class CrosshairApp(QWidget):
             self.load_image(f)
 
     def _on_center(self):
-        self._center()
-        ok = QMessageBox.question(self, "Confirm", "Center OK?", QMessageBox.Yes | QMessageBox.No)
-        if ok == QMessageBox.Yes:
-            self._enter_overlay()
-        else:
-            self._on_reset()
+        self._enter_overlay()
 
     def _on_pin_toggle(self):
         self.setWindowFlag(Qt.WindowStaysOnTopHint, self.pin_chk.isChecked())
         self.show()
 
     def _center(self):
-        geom = QApplication.primaryScreen().availableGeometry()
-        x = (geom.width() - self.width()) // 2
-        y = (geom.height() - self.height()) // 2
+        screen = QApplication.primaryScreen()
+        geom = screen.geometry()
+        win_size = self.size()
+        x = geom.left() + (geom.width() - win_size.width()) // 2
+        y = geom.top() + (geom.height() - win_size.height()) // 2
         self.move(x, y)
 
     def _enter_overlay(self):
@@ -322,12 +307,24 @@ class CrosshairApp(QWidget):
         self.show()
         set_click_through(self)
 
-    def _exit_overlay(self):
+    def show_settings(self):
+        self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+        self.setFixedSize(*WINDOW_SIZE)
+        self.setStyleSheet("background-color: #121212; color: white;")
+
         for w in (self.reset_btn, self.select_btn, self.center_btn, self.pin_chk, self.change_hotkey_btn):
             w.show()
+
         self.setAttribute(Qt.WA_TranslucentBackground, False)
-        self._init_window()
+        self.setLayout(self.settings_layout)
         self.show()
+        self._center()
+
+    def show_overlay(self):
+        self._enter_overlay()
+
+    def _exit_overlay(self):
+        self.show_settings()
 
     def _toggle_ui(self, show: bool):
         self.setVisible(show)
